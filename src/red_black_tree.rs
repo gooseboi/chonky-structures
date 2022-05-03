@@ -1,5 +1,6 @@
 use core::borrow::Borrow;
 use core::cmp::Ordering;
+use core::marker::PhantomData;
 use core::ptr;
 
 struct NodePtr<K, V>(*mut Node<K, V>);
@@ -20,10 +21,6 @@ impl<K, V> NodePtr<K, V> {
 
     fn key<'a>(&'a self) -> &'a K {
         &self.get_node().val.0
-    }
-
-    fn key_mut<'a>(&'a mut self) -> &'a mut K {
-        &mut self.get_node().val.0
     }
 
     fn val_mut<'a>(&'a mut self) -> &'a mut V {
@@ -51,32 +48,32 @@ impl<K, V> NodePtr<K, V> {
         self.get_node().parent
     }
 
-    fn right_uncle(&self) -> Self {
-        self.parent().parent().right()
-    }
-
-    fn left_uncle(&self) -> Self {
-        self.parent().parent().left()
+    fn uncle(&self) -> Self {
+        if self.parent().is_right_child() {
+            self.parent().parent().left()
+        } else {
+            self.parent().parent().right()
+        }
     }
 
     fn set_right(&mut self, node: &NodePtr<K, V>) {
-        unsafe { (*self.0).right = *node };
+        self.get_node().right = *node;
     }
 
     fn set_left(&mut self, node: &NodePtr<K, V>) {
-        unsafe { (*self.0).left = *node };
+        self.get_node().left = *node;
     }
 
     fn set_child(&mut self, node: &NodePtr<K, V>, is_right: bool) {
         if is_right {
-            self.set_left(node);
-        } else {
             self.set_right(node);
+        } else {
+            self.set_left(node);
         }
     }
 
     fn set_parent(&mut self, node: &NodePtr<K, V>) {
-        unsafe { (*self.0).parent = *node };
+        self.get_node().parent = *node;
     }
 
     fn is_left_child(&self) -> bool {
@@ -103,8 +100,8 @@ impl<K, V> NodePtr<K, V> {
         }
     }
 
-    fn set(&mut self, other: &NodePtr<K, V>) {
-        self.0 = other.0;
+    fn set_colour(&mut self, c: Colour) {
+        (*self.get_node()).colour = c;
     }
 
     fn is_black(&self) -> bool {
@@ -117,14 +114,6 @@ impl<K, V> NodePtr<K, V> {
 
     fn is_red(&self) -> bool {
         !self.is_black()
-    }
-
-    fn colour(&self) -> Colour {
-        self.get_node().colour
-    }
-
-    fn set_colour(&mut self, c: Colour) {
-        (*self.get_node()).colour = c;
     }
 }
 
@@ -142,30 +131,6 @@ impl<K, V> PartialEq for NodePtr<K, V> {
     }
 }
 impl<K, V> Eq for NodePtr<K, V> {}
-
-impl<K, V> NodePtr<K, V> {
-    fn print_tree(&self)
-    where
-        K: core::fmt::Debug,
-        V: core::fmt::Debug,
-    {
-        if self.is_null() {
-            return;
-        }
-        unsafe {
-            println!("Ptr    {:#?}", self.0);
-            println!("Parent {:#?}", (*self.0).parent.0);
-            println!("Right  {:#?}", (*self.0).right.0);
-            println!("Left   {:#?}", (*self.0).left.0);
-            println!("Key    {:#?}", (*self.0).val.0);
-            println!("Val    {:#?}", (*self.0).val.1);
-        }
-        println!("");
-        println!("");
-        unsafe { (*self.0).right.print_tree() };
-        unsafe { (*self.0).left.print_tree() };
-    }
-}
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 enum Colour {
@@ -209,6 +174,33 @@ impl<K, V> RedBlackTree<K, V> {
     pub fn len(&self) -> usize {
         self.len
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    #[inline]
+    fn clear_node(node: NodePtr<K, V>) {
+        if node.is_null() {
+            return;
+        }
+
+        unsafe {
+            Self::clear_node(node.right());
+            Self::clear_node(node.left());
+            Box::from_raw(node.0);
+        }
+    }
+
+    fn clear(&mut self) {
+        Self::clear_node(self.root);
+    }
+}
+
+impl<K, V> Default for RedBlackTree<K, V> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<K, V> RedBlackTree<K, V>
@@ -220,7 +212,7 @@ where
     fn rotate_dir(&mut self, mut node: NodePtr<K, V>, dir: bool) {
         let mut y = node.child_dir(!dir);
         node.set_child(&y.child_dir(dir), !dir);
-        if y.child_dir(dir).is_null() {
+        if !y.child_dir(dir).is_null() {
             y.child_dir(dir).set_parent(&node);
         }
         y.set_parent(&node.parent());
@@ -247,47 +239,37 @@ where
 
     /// Performs the necessary corrections to the tree to fit the 4
     /// Red Black Tree criteria.
-    fn correct_after_insert(&mut self, mut node: NodePtr<K, V>)
-    where
-        K: std::fmt::Debug,
-        V: std::fmt::Debug,
-    {
+    fn correct_after_insert(&mut self, mut node: NodePtr<K, V>) {
         while node.parent().is_red() {
             if node.parent().is_left_child() {
-                if node.right_uncle().is_red() {
-                    node.right_uncle().set_colour(Colour::Black);
+                if node.uncle().is_red() {
+                    node.uncle().set_colour(Colour::Black);
                     node.parent().set_colour(Colour::Black);
                     node.parent().parent().set_colour(Colour::Red);
                     node = node.parent().parent();
                 } else {
-                    let mut parent = node.parent();
                     if node.is_right_child() {
-                        self.rotate_left(node.parent());
-                        let temp = parent;
-                        parent = node;
-                        node = temp;
+                        node = node.parent();
+                        self.rotate_left(node);
                     }
-                    parent.set_colour(Colour::Black);
-                    parent.parent().set_colour(Colour::Red);
-                    self.rotate_right(parent.parent());
+                    node.parent().set_colour(Colour::Black);
+                    node.parent().parent().set_colour(Colour::Red);
+                    self.rotate_right(node.parent().parent());
                 }
             } else {
-                if node.left_uncle().is_red() {
+                if node.uncle().is_red() {
                     node.parent().set_colour(Colour::Black);
-                    node.left_uncle().set_colour(Colour::Black);
+                    node.uncle().set_colour(Colour::Black);
                     node.parent().parent().set_colour(Colour::Red);
                     node = node.parent().parent();
                 } else {
-                    let mut parent = node.parent();
                     if node.is_left_child() {
-                        self.rotate_right(node.parent());
-                        let temp = parent;
-                        parent = node;
-                        node = temp;
+                        node = node.parent();
+                        self.rotate_right(node);
                     }
-                    parent.set_colour(Colour::Black);
-                    parent.parent().set_colour(Colour::Red);
-                    self.rotate_left(parent.parent());
+                    node.parent().set_colour(Colour::Black);
+                    node.parent().parent().set_colour(Colour::Red);
+                    self.rotate_left(node.parent().parent());
                 }
             }
         }
@@ -297,18 +279,16 @@ where
     /// Places into the tree, just like any normal binary search tree.
     /// If there was a new leaf node placed in the tree returns Some(NodePtr<K, V>),
     /// if the value in an existing node was replaced, returns None
-    fn place_during_insert(&mut self, k: K, v: V) -> Option<NodePtr<K, V>> {
+    fn place(&mut self, k: K, v: V) -> Option<NodePtr<K, V>> {
         let mut next_node = self.root;
         let mut cur_node = NodePtr::null();
         while !next_node.is_null() {
             cur_node = next_node;
-            if &k > next_node.key() {
-                next_node = next_node.right();
-            } else if &k < next_node.key() {
-                next_node = next_node.left();
-            } else {
-                break;
-            }
+            match k.cmp(next_node.key()) {
+                Ordering::Less => next_node = next_node.left(),
+                Ordering::Greater => next_node = next_node.right(),
+                Ordering::Equal => break,
+            };
         }
 
         if self.root.is_null() {
@@ -340,27 +320,43 @@ where
         }
     }
 
-    pub fn insert(&mut self, k: K, v: V)
-    where
-        K: std::fmt::Debug,
-        V: std::fmt::Debug,
-    {
-        let ret = self.place_during_insert(k, v);
+    pub fn insert(&mut self, k: K, v: V) {
+        let ret = self.place(k, v);
         if ret.is_none() {
             return;
         }
         let node = ret.unwrap();
-        println!("Called insert");
-        self.root.print_tree();
-        println!("-----------------------------------------------------");
-        //self.correct_after_insert(node);
+        self.correct_after_insert(node);
         self.len += 1;
     }
 
-    fn find_node(&self, k: &K) -> NodePtr<K, V> {
+    pub fn remove<Q>(&mut self, k: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        let node = self.find_node(k);
+        self.delete(node);
+        self.len -= 1;
+        None
+    }
+
+    fn delete<Q>(&mut self, node: NodePtr<K, V>)
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        unimplemented!()
+    }
+
+    fn find_node<Q>(&self, k: &Q) -> NodePtr<K, V>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
         let mut next_node = self.root;
         while !next_node.is_null() {
-            match k.cmp(next_node.key()) {
+            match k.cmp(next_node.key().borrow()) {
                 Ordering::Greater => next_node = next_node.right(),
                 Ordering::Less => next_node = next_node.left(),
                 Ordering::Equal => return next_node,
@@ -371,9 +367,10 @@ where
 
     pub fn get<'a, Q>(&'a self, k: &Q) -> Option<&'a V>
     where
-        Q: Borrow<K>,
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
     {
-        let ret = self.find_node(k.borrow());
+        let ret = self.find_node(k);
         if ret.is_null() {
             None
         } else {
@@ -381,46 +378,101 @@ where
         }
     }
 
+    pub fn get_mut<'a, Q>(&'a mut self, k: &Q) -> Option<&'a mut V>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        let ret = self.find_node(k);
+        if ret.is_null() {
+            None
+        } else {
+            Some(unsafe { &mut (*ret.0).val.1 })
+        }
+    }
+
+    pub fn contains_key<Q>(&self, k: &Q) -> bool
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        self.get(k).is_some()
+    }
+
     pub fn iter(&self) -> Iter<K, V> {
-        Iter::with_root(self.root)
+        Iter::new(self.root, self.root, self.len)
+    }
+
+    pub fn values(&self) -> Values<K, V> {
+        let iter = self.iter();
+        Values {
+            iter,
+            _marker: PhantomData,
+        }
+    }
+
+    pub fn keys(&self) -> Keys<K, V> {
+        let iter = self.iter();
+        Keys {
+            iter,
+            _marker: PhantomData,
+        }
     }
 }
 
-pub struct Iter<K, V> {
-    cur_node: NodePtr<K, V>,
+impl<K, V> Drop for RedBlackTree<K, V> {
+    fn drop(&mut self) {
+        self.clear();
+    }
 }
 
-impl<K, V> Iter<K, V> {
-    fn with_root(root: NodePtr<K, V>) -> Self {
-        let mut iter = Iter { cur_node: root };
-        iter.in_order_successor();
+#[derive(Copy, Clone)]
+pub struct Iter<'a, K: 'a, V: 'a> {
+    head: NodePtr<K, V>,
+    tail: NodePtr<K, V>,
+    remaining: usize,
+    _marker: PhantomData<&'a (K, V)>,
+}
+
+impl<K, V> Iter<'_, K, V> {
+    fn new(head: NodePtr<K, V>, tail: NodePtr<K, V>, len: usize) -> Self {
+        let mut iter = Iter {
+            head,
+            tail,
+            remaining: len,
+            _marker: PhantomData,
+        };
+        iter.head = iter.find_leftmost();
         iter
     }
-    fn in_order_successor(&mut self) {
-        if !self.cur_node.is_null() {
+
+    fn in_order_next(&mut self) {
+        if self.head.is_null() {
             return;
         }
 
-        if !self.cur_node.right().is_null() {
-            self.cur_node = self.cur_node.right();
-            self.cur_node = self.find_leftmost()
+        if !self.head.right().is_null() {
+            self.head = self.head.right();
+            self.head = self.find_leftmost()
         } else {
-            self.cur_node = self.find_left_parent();
+            self.head = self.find_next_parent();
         }
     }
 
-    fn find_left_parent(&self) -> NodePtr<K, V> {
-        let mut next_node = self.cur_node;
-        let mut cur_node = NodePtr::null();
+    fn find_next_parent(&self) -> NodePtr<K, V> {
+        let mut next_node = self.head;
         while !next_node.is_null() {
-            cur_node = next_node;
-            next_node = next_node.parent();
+            if next_node.is_left_child() {
+                return next_node.parent();
+            } else {
+                next_node = next_node.parent();
+            }
         }
-        cur_node
+        next_node
     }
 
     fn find_leftmost(&self) -> NodePtr<K, V> {
-        let mut next_node = self.cur_node;
+        let mut next_node = self.head;
         let mut cur_node = NodePtr::null();
         while !next_node.is_null() {
             cur_node = next_node;
@@ -428,39 +480,198 @@ impl<K, V> Iter<K, V> {
         }
         cur_node
     }
+
+    fn in_order_prev(&mut self) {
+        if self.tail.is_null() {
+            return;
+        }
+
+        if !self.tail.left().is_null() {
+            self.tail = self.tail.left();
+            self.tail = self.find_rightmost()
+        } else {
+            self.tail = self.find_prev_parent();
+        }
+    }
+
+    fn find_prev_parent(&self) -> NodePtr<K, V> {
+        let mut next_node = self.tail;
+        while !next_node.is_null() {
+            if next_node.is_right_child() {
+                return next_node.parent();
+            } else {
+                next_node = next_node.parent();
+            }
+        }
+        next_node
+    }
+
+    fn find_rightmost(&self) -> NodePtr<K, V> {
+        let mut next_node = self.tail;
+        let mut cur_node = NodePtr::null();
+        while !next_node.is_null() {
+            cur_node = next_node;
+            next_node = next_node.right();
+        }
+        cur_node
+    }
+}
+
+impl<'a, K: 'a, V: 'a> Iterator for Iter<'a, K, V> {
+    type Item = (&'a K, &'a V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.head.is_null() || self.remaining == 0 {
+            None
+        } else {
+            let p = unsafe { (&(*self.head.0).val.0, &(*self.head.0).val.1) };
+            self.in_order_next();
+            self.remaining -= 1;
+            Some(p)
+        }
+    }
+}
+
+impl<'a, K: 'a, V: 'a> DoubleEndedIterator for Iter<'a, K, V> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.tail.is_null() || self.remaining == 0 {
+            None
+        } else {
+            let p = unsafe { (&(*self.head.0).val.0, &(*self.head.0).val.1) };
+            self.in_order_prev();
+            self.remaining -= 1;
+            Some(p)
+        }
+    }
+}
+#[derive(Copy, Clone)]
+pub struct Keys<'a, K: 'a, V: 'a> {
+    iter: Iter<'a, K, V>,
+    _marker: PhantomData<&'a (K, V)>,
+}
+
+impl<'a, K: 'a, V: 'a> Iterator for Keys<'a, K, V> {
+    type Item = &'a K;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next().map(|(k, _)| k)
+    }
+}
+
+impl<'a, K: 'a, V: 'a> DoubleEndedIterator for Keys<'a, K, V> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.iter.next_back().map(|(k, _)| k)
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct Values<'a, K: 'a, V: 'a> {
+    iter: Iter<'a, K, V>,
+    _marker: PhantomData<&'a (K, V)>,
+}
+
+impl<'a, K: 'a, V: 'a> Iterator for Values<'a, K, V> {
+    type Item = &'a V;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next().map(|(_, v)| v)
+    }
+}
+
+impl<'a, K: 'a, V: 'a> DoubleEndedIterator for Values<'a, K, V> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.iter.next_back().map(|(_, v)| v)
+    }
+}
+
+mod tests {
+    use super::{Iter, RedBlackTree};
+    #[test]
+    fn empty() {
+        let _x: RedBlackTree<u32, u32> = RedBlackTree::new();
+    }
+
+    #[test]
+    fn insert() {
+        let mut tree = RedBlackTree::new();
+
+        tree.insert(15, 7);
+        tree.insert(2, 7);
+        tree.insert(5, 3);
+        tree.insert(12, 23);
+        tree.insert(12, 25);
+        tree.insert(4, 12);
+        tree.insert(6, 15);
+        tree.insert(7, 3);
+        tree.insert(3, 21);
+        tree.insert(9, 91);
+        assert_eq!(tree.len(), 9);
+
+        let iter = tree.keys();
+        let vec: Vec<_> = iter.collect();
+        assert_eq!(vec, [&2, &3, &4, &5, &6, &7, &9, &12, &15]);
+    }
 }
 
 #[test]
-fn empty() {
-    let _x: RedBlackTree<u32, u32> = RedBlackTree::new();
-}
+fn test_lots_of_insertions() {
+    let mut m = RedBlackTree::new();
 
-#[test]
-fn insert() {
-    let mut tree = RedBlackTree::new();
-    tree.insert(2, 7);
-    let v = tree.get(&2);
-    assert_eq!(v, Some(&7));
+    // Try this a few times to make sure we never screw up the hashmap's
+    // internal state.
+    for _ in 0..10 {
+        assert!(m.is_empty());
 
-    tree.insert(5, 3);
-    let v = tree.get(&5);
-    assert_eq!(v, Some(&3));
+        for i in 1..101 {
+            m.insert(i, i);
 
-    tree.insert(4, 12);
-    let v = tree.get(&4);
-    assert_eq!(v, Some(&12));
+            for j in 1..i + 1 {
+                let r = m.get(&j);
+                assert_eq!(r, Some(&j));
+            }
 
-    tree.insert(6, 15);
-    let v = tree.get(&6);
-    assert_eq!(v, Some(&15));
+            for j in i + 1..101 {
+                let r = m.get(&j);
+                assert_eq!(r, None);
+            }
+        }
 
-    tree.insert(7, 3);
-    let v = tree.get(&7);
-    assert_eq!(v, Some(&3));
+        for i in 101..201 {
+            assert!(!m.contains_key(&i));
+        }
 
-    tree.insert(12, 23);
-    let v = tree.get(&12);
-    assert_eq!(v, Some(&23));
-    assert_eq!(tree.len(), 6);
-    assert!(false);
+        // remove forwards
+        for i in 1..101 {
+            assert!(m.remove(&i).is_some());
+
+            for j in 1..i + 1 {
+                assert!(!m.contains_key(&j));
+            }
+
+            for j in i + 1..101 {
+                assert!(m.contains_key(&j));
+            }
+        }
+
+        for i in 1..101 {
+            assert!(!m.contains_key(&i));
+        }
+
+        for i in 1..101 {
+            m.insert(i, i);
+        }
+
+        // remove backwards
+        for i in (1..101).rev() {
+            assert!(m.remove(&i).is_some());
+
+            for j in i..101 {
+                assert!(!m.contains_key(&j));
+            }
+
+            for j in 1..i {
+                assert!(m.contains_key(&j));
+            }
+        }
+    }
 }
