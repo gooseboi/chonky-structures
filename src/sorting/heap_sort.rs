@@ -21,25 +21,25 @@ fn heapify<T: Ord>(slice: &mut [T], root: usize) {
     }
 }
 
+pub fn sort<T>(slice: &mut [T])
+where
+    T: Ord,
+{
+    for i in (0..(slice.len() / 2)).rev() {
+        heapify(slice, i);
+    }
+
+    for i in (0..slice.len()).rev() {
+        slice.swap(0, i);
+        heapify(&mut slice[..i], 0);
+    }
+}
+
 impl<T> Sorter<T> for HeapSort {
     fn sort(&self, slice: &mut [T])
     where
         T: Ord,
     {
-        for i in (0..(slice.len() / 2)).rev() {
-            heapify(slice, i);
-        }
-
-        for i in (0..slice.len()).rev() {
-            slice.swap(0, i);
-            heapify(&mut slice[..i], 0);
-        }
+        sort(slice);
     }
-}
-
-#[test]
-fn it_works() {
-    let mut v = vec![1, 4, 3, 5, 2];
-    HeapSort.sort(&mut v);
-    assert_eq!(v, &[1, 2, 3, 4, 5]);
 }

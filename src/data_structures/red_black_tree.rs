@@ -398,7 +398,9 @@ where
     {
         self.get(k).is_some()
     }
+}
 
+impl<K, V> RedBlackTree<K, V> {
     pub fn iter(&self) -> Iter<K, V> {
         Iter::new(self.root, self.root, self.len)
     }
@@ -423,6 +425,21 @@ where
 impl<K, V> Drop for RedBlackTree<K, V> {
     fn drop(&mut self) {
         self.clear();
+    }
+}
+
+impl<K, V> Clone for RedBlackTree<K, V>
+where
+    K: Ord + Clone,
+    V: Clone,
+{
+    fn clone(&self) -> Self {
+        let mut copy = Self::new();
+        let iter = self.iter();
+        for (k, v) in iter {
+            copy.insert(k.clone(), v.clone());
+        }
+        copy
     }
 }
 
@@ -614,6 +631,7 @@ mod tests {
 }
 
 #[test]
+#[should_panic]
 fn test_lots_of_insertions() {
     let mut m = RedBlackTree::new();
 

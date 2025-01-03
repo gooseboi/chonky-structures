@@ -1,4 +1,3 @@
-pub mod red_black_tree;
+pub mod data_structures;
 
-mod sorting;
-pub use sorting::*;
+pub mod sorting;
